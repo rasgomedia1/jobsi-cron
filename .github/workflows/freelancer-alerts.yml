@@ -1,0 +1,40 @@
+# Jobsi: every 15 min, ask https://jobsi.rasgomedia.es to check Freelancer for new projects, client messages and
+# awards (it pushes them to Telegram and the Jobsi Pujas app). Vercel Hobby only allows daily crons, hence this.
+# The repo is public (free Actions minutes), so the log prints counts only, never titles or the response body.
+name: freelancer-alerts
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+    # Monthly keepalive: GitHub disables schedules in repos with no activity for 60 days.
+    - cron: '17 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  check:
+    if: github.event.schedule != '17 4 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Call Jobsi
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS --max-time 280 -o resp.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://jobsi.rasgomedia.es/api/cron/freelancer-alerts)
+          echo "HTTP $code"
+          test "$code" = 200
+          jq -c '{fetched, fresh, alerts: (.alerts | length), pushed, events: ((.events.events // []) | length), errors: ((.events.errors // []) | length)}' resp.json
+
+  keepalive:
+    if: github.event.schedule == '17 4 1 * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-enable the schedule
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/freelancer-alerts.yml/enable"
