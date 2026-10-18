@@ -1,11 +1,13 @@
 # Jobsi: every 15 min, ask https://jobsi.rasgomedia.es to check Freelancer for new projects, client messages and
 # awards (it pushes them to Telegram and the Jobsi Pujas app). Vercel Hobby only allows daily crons, hence this.
+# GitHub fires schedules late or skips them (one run in ~3 h on 2026-10-18), so each run stays alive for ~5.5 h and
+# calls every 15 min itself; the hourly schedule only has to land once in that span to keep the chain going.
 # The repo is public (free Actions minutes), so the log prints counts only, never titles or the response body.
 name: freelancer-alerts
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7 * * * *'
     # Monthly keepalive: GitHub disables schedules in repos with no activity for 60 days.
     - cron: '17 4 1 * *'
   workflow_dispatch:
@@ -13,22 +15,37 @@ on:
 permissions:
   actions: write
 
+# One loop at a time; a schedule that fires meanwhile waits and takes over when the running loop ends.
+concurrency:
+  group: freelancer-alerts
+  cancel-in-progress: false
+
 jobs:
   check:
     if: github.event.schedule != '17 4 1 * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 345
     steps:
-      - name: Call Jobsi
+      - name: Call Jobsi every 15 min
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          code=$(curl -sS --max-time 280 -o resp.json -w '%{http_code}' \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            https://jobsi.rasgomedia.es/api/cron/freelancer-alerts)
-          echo "HTTP $code"
-          test "$code" = 200
-          jq -c '{fetched, fresh, alerts: (.alerts | length), pushed, events: ((.events.events // []) | length), errors: ((.events.errors // []) | length)}' resp.json
+          end=$(( $(date +%s) + 330 * 60 ))
+          while :; do
+            start=$(date +%s)
+            code=$(curl -sS --max-time 280 -o resp.json -w '%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              https://jobsi.rasgomedia.es/api/cron/freelancer-alerts || echo 000)
+            if [ "$code" = 200 ]; then
+              echo "$(date -u +%H:%M) $(jq -c '{fetched, fresh, alerts: (.alerts | length), pushed, events: ((.events.events // []) | length), errors: ((.events.errors // []) | length)}' resp.json)"
+            else
+              echo "$(date -u +%H:%M) HTTP $code"
+            fi
+            rm -f resp.json
+            next=$(( start + 900 ))
+            [ "$next" -ge "$end" ] && break
+            sleep $(( next - $(date +%s) ))
+          done
 
   keepalive:
     if: github.event.schedule == '17 4 1 * *'
