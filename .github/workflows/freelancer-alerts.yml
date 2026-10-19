@@ -1,13 +1,15 @@
 # Jobsi: every 15 min, ask https://jobsi.rasgomedia.es to check Freelancer for new projects, client messages and
 # awards (it pushes them to Telegram and the Jobsi Pujas app). Vercel Hobby only allows daily crons, hence this.
-# GitHub fires schedules late or skips them (one run in ~3 h on 2026-10-18), so each run stays alive for ~5.5 h and
-# calls every 15 min itself; the hourly schedule only has to land once in that span to keep the chain going.
+# Backup for the Cloudflare Worker (the server runs only the first call in each 10-min window, the other gets skipped).
+# GitHub fires schedules late or skips them (4 of 11 hourly runs fired on 2026-10-18/19), so each run stays alive for
+# ~5 h 50 min, just under the 6 h job limit, and calls every 15 min itself; a schedule only has to land once in that
+# span to keep the chain going, and firing every 30 min gives it more chances.
 # The repo is public (free Actions minutes), so the log prints counts only, never titles or the response body.
 name: freelancer-alerts
 
 on:
   schedule:
-    - cron: '7 * * * *'
+    - cron: '7,37 * * * *'
     # Monthly keepalive: GitHub disables schedules in repos with no activity for 60 days.
     - cron: '17 4 1 * *'
   workflow_dispatch:
@@ -24,20 +26,20 @@ jobs:
   check:
     if: github.event.schedule != '17 4 1 * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 345
+    timeout-minutes: 358
     steps:
       - name: Call Jobsi every 15 min
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          end=$(( $(date +%s) + 330 * 60 ))
+          end=$(( $(date +%s) + 350 * 60 ))
           while :; do
             start=$(date +%s)
             code=$(curl -sS --max-time 280 -o resp.json -w '%{http_code}' \
               -H "Authorization: Bearer $CRON_SECRET" \
               https://jobsi.rasgomedia.es/api/cron/freelancer-alerts || echo 000)
             if [ "$code" = 200 ]; then
-              echo "$(date -u +%H:%M) $(jq -c '{fetched, fresh, alerts: (.alerts | length), pushed, events: ((.events.events // []) | length), errors: ((.events.errors // []) | length)}' resp.json)"
+              echo "$(date -u +%H:%M) $(jq -c '{skipped, fetched, fresh, alerts: (.alerts | length), pushed, events: ((.events.events // []) | length), errors: ((.events.errors // []) | length)}' resp.json)"
             else
               echo "$(date -u +%H:%M) HTTP $code"
             fi
